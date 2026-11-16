@@ -14,6 +14,7 @@ MODELS = [
     ("4 Hydrogen", "gemini-4-hydrogen"),
     ("3.8 Flash", "gemini-3.8-flash"),
     ("3.7 Flash", "gemini-3.7-flash"),
+    ("3.6 Flash", "gemini-3.6-flash"),
     ("3.5 F-Lite", "gemini-3.5-flash-lite"),
 ]
 
@@ -21,6 +22,7 @@ MODEL_SHORT = {
     "gemini-4-hydrogen": "4H",
     "gemini-3.8-flash": "3.8F",
     "gemini-3.7-flash": "3.7F",
+    "gemini-3.6-flash": "3.6F",
     "gemini-3.5-flash-lite": "3.5L",
 }
 
@@ -37,6 +39,9 @@ class ProxyWidget:
         self.active_model = "gemini-4-hydrogen"
         self.active_key_index = 1
         self.models_data = {}
+        self.last_rotation_id = None
+        self.bubble_win = None
+        self.bubble_hide_job = None
 
         self._press_root_x = 0
         self._press_root_y = 0
@@ -194,6 +199,7 @@ class ProxyWidget:
         dx = e.x_root - self._press_root_x
         dy = e.y_root - self._press_root_y
         self.root.geometry(f"+{self._win_start_x + dx}+{self._win_start_y + dy}")
+        self.reposition_speech_bubble()
 
     def on_release(self, e):
         if abs(e.x_root - self._press_root_x) < 6 and abs(e.y_root - self._press_root_y) < 6:
@@ -326,6 +332,111 @@ class ProxyWidget:
         if self.expanded:
             self.resize_while_expanded()
 
+        rot = data.get("lastRotation")
+        if isinstance(rot, dict) and "id" in rot:
+            rot_id = rot["id"]
+            if self.last_rotation_id is None:
+                self.last_rotation_id = rot_id
+            elif rot_id != self.last_rotation_id:
+                self.last_rotation_id = rot_id
+                self.show_speech_bubble(rot)
+
+    def show_speech_bubble(self, rot):
+        self.hide_speech_bubble()
+
+        from_key = rot.get("fromKey", "?")
+        to_key = rot.get("toKey", "?")
+        reason = rot.get("reason", "Rotated")
+
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg=TRANSPARENT_KEY)
+        win.attributes("-transparentcolor", TRANSPARENT_KEY)
+
+        outer = tk.Frame(win, bg=TRANSPARENT_KEY)
+        outer.pack()
+
+        bubble = tk.Frame(
+            outer,
+            bg="#1e1e2e",
+            highlightbackground="#f9e2af",
+            highlightthickness=1,
+            padx=8,
+            pady=5,
+            cursor="hand2",
+        )
+        bubble.pack(side=tk.LEFT)
+
+        line1 = tk.Label(
+            bubble,
+            text=f"Key #{from_key}: {reason}",
+            bg="#1e1e2e",
+            fg="#f9e2af",
+            font=("Segoe UI", 8, "bold"),
+            anchor="w",
+            cursor="hand2",
+        )
+        line1.pack(fill=tk.X)
+
+        line2 = tk.Label(
+            bubble,
+            text=f"→ Now on Key #{to_key}",
+            bg="#1e1e2e",
+            fg="#a6e3a1",
+            font=("Segoe UI", 8),
+            anchor="w",
+            cursor="hand2",
+        )
+        line2.pack(fill=tk.X)
+
+        tail = tk.Canvas(
+            outer,
+            width=8,
+            height=16,
+            bg=TRANSPARENT_KEY,
+            highlightthickness=0,
+            cursor="hand2",
+        )
+        tail.pack(side=tk.LEFT, anchor="center")
+        tail.create_polygon(0, 2, 8, 8, 0, 14, fill="#1e1e2e", outline="#f9e2af")
+
+        for w in (win, outer, bubble, line1, line2, tail):
+            w.bind("<Button-1>", lambda e: self.hide_speech_bubble())
+
+        self.bubble_win = win
+        self.reposition_speech_bubble()
+        self.bubble_hide_job = self.root.after(5500, self.hide_speech_bubble)
+
+    def reposition_speech_bubble(self):
+        if not self.bubble_win or not self.bubble_win.winfo_exists():
+            return
+        self.bubble_win.update_idletasks()
+        bw = self.bubble_win.winfo_reqwidth()
+        bh = self.bubble_win.winfo_reqheight()
+
+        gif_x = self.gif_label.winfo_rootx()
+        gif_y = self.gif_label.winfo_rooty()
+        _, gh = self.gif_size
+
+        bx = max(0, gif_x - bw - 4)
+        by = max(0, gif_y + (gh - bh) // 2)
+        self.bubble_win.geometry(f"{bw}x{bh}+{bx}+{by}")
+
+    def hide_speech_bubble(self):
+        if self.bubble_hide_job:
+            try:
+                self.root.after_cancel(self.bubble_hide_job)
+            except Exception:
+                pass
+            self.bubble_hide_job = None
+        if self.bubble_win:
+            try:
+                self.bubble_win.destroy()
+            except Exception:
+                pass
+            self.bubble_win = None
+
     def render_panel(self):
         for name, b in self.model_btns.items():
             if name == self.active_model:
@@ -399,6 +510,7 @@ class ProxyWidget:
 
     def close(self):
         self.running = False
+        self.hide_speech_bubble()
         if self.anim_job:
             self.root.after_cancel(self.anim_job)
         try:

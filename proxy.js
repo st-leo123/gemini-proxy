@@ -40,6 +40,7 @@ const MODELS = [
   'gemini-4-hydrogen',
   'gemini-3.8-flash',
   'gemini-3.7-flash',
+  'gemini-3.6-flash',
   'gemini-3.5-flash-lite',
 ];
 
@@ -48,6 +49,8 @@ const consecutive429s = Object.fromEntries(MODELS.map((m) => [m, {}]));
 const activeKeyPerModel = Object.fromEntries(MODELS.map((m) => [m, 0]));
 
 let activeModel = 'gemini-4-hydrogen';
+let rotationCounter = 0;
+let lastRotation = null;
 
 // ==========================================
 // 3. Quota Timing & Status Helpers
@@ -753,6 +756,35 @@ async function executeGeminiWithRotation(geminiPayload, isStream, clientLabel) {
           );
         }
 
+        const fromKey = idx + 1;
+        const toKey = ((idx + 1) % totalKeys) + 1;
+        let rotReason = classification.reason || 'Rate limited';
+        let rotMessage = `Key #${fromKey} ${rotReason} -> Switched to Key #${toKey}`;
+
+        if (classification.isDaily || (status === 429 && prevStreak >= 1)) {
+          rotReason = 'Daily limit reached';
+          rotMessage = `Key #${fromKey} hit daily limit -> Switched to Key #${toKey}`;
+        } else if (classification.reason === 'Timeout') {
+          rotReason = 'Timed out';
+          rotMessage = `Key #${fromKey} timed out -> Switched to Key #${toKey}`;
+        } else if (status === 429) {
+          rotReason = 'RPM limit reached';
+          rotMessage = `Key #${fromKey} RPM limit reached -> Switched to Key #${toKey}`;
+        } else if (classification.rotate) {
+          rotReason = 'Overloaded';
+          rotMessage = `Key #${fromKey} overloaded (${classification.reason}) -> Switched to Key #${toKey}`;
+        }
+
+        lastRotation = {
+          id: ++rotationCounter,
+          timestamp: Date.now(),
+          model: currentModel,
+          fromKey,
+          toKey,
+          reason: rotReason,
+          message: rotMessage,
+        };
+
         activeKeyPerModel[currentModel] = (idx + 1) % totalKeys;
         continue;
       }
@@ -801,6 +833,7 @@ app.get('/status', (req, res) => {
     activeModel,
     activeKeyIndex: currentActiveKeyIdx,
     models: getModelsStatus(keysCount),
+    lastRotation,
     ...(error ? { keysError: error } : {}),
   });
 });
